@@ -1,0 +1,62 @@
+name: RTR Sender ID watch
+
+# Every 4 hours. RTR refreshes the open-data register once a day, so most runs
+# will find nothing - that is expected and costs nothing.
+on:
+  schedule:
+    - cron: "17 */4 * * *"
+  workflow_dispatch:
+    inputs:
+      bootstrap:
+        description: "Reseed the baseline instead of reporting new entries"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: rtr-senderid-watch
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check the register
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          MAIL_FROM: ${{ secrets.MAIL_FROM }}
+          MAIL_TO: ${{ secrets.MAIL_TO }}
+        run: |
+          python3 rtr_senderid_watch.py \
+            --state state.json \
+            --out new_entries \
+            ${{ inputs.bootstrap && '--bootstrap' || '' }}
+
+      - name: Commit the updated baseline
+        run: |
+          git config user.name "rtr-senderid-watch"
+          git config user.email "actions@github.com"
+          git add state.json new_entries.md new_entries.json
+          git diff --staged --quiet || git commit -m "Register check $(date -u +%Y-%m-%dT%H:%MZ)"
+          git push
+
+      - name: Upload the report
+        uses: actions/upload-artifact@v4
+        with:
+          name: new-entries
+          path: |
+            new_entries.md
+            new_entries.json
+          if-no-files-found: ignore
